@@ -1,172 +1,121 @@
-import cv2, time
+import cv2, joblib
+import numpy as np
 import mediapipe as mp
-from asl_detector import ASLDetector
+from ultralytics import YOLO
+from collections import deque
 
-# Initialize video capture
+YOLO_MODEL_PATH = "C:\\Users\\Jonathan Philips\\Coding\\AI-Projects\\asl-detect\\runs\\detect\\train\\weights\\best.pt"
+RF_MODEL_PATH = "C:\\Users\\Jonathan Philips\\Coding\\AI-Projects\\asl-detect\\asl_landmark_model.pkl"
+
+yolo_model = YOLO(YOLO_MODEL_PATH)
+
+bundle = joblib.load(RF_MODEL_PATH)
+rf_model = bundle["model"]
+rf_classes = bundle["class_names"]
+
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+pred_history = deque(maxlen=10)
+
+
+def get_landmark_vector(hand_landmarks):
+    vals = []
+    for lm in hand_landmarks.landmark:
+        vals.extend([lm.x, lm.y, lm.z])
+    return np.array(vals, dtype=np.float32)
+
+
 cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise SystemExit("Could not open webcam")
 
-# Initialize Mediapipe Hands module
-mpHands = mp.solutions.hands
-hands = mpHands.Hands()
-mpDraw = mp.solutions.drawing_utils
+with mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+) as hands:
 
-# Initialize ASL Detector
-asl_detector = ASLDetector()
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-# Variables for FPS calculation
-pTime = 0
-cTime = 0
+        frame = cv2.flip(frame, 1)
+        h, w, _ = frame.shape
 
-# Variables for stable detection
-last_letter = None
-letter_count = 0
-confidence_threshold = 10  # Increased for better stability
-confirmed_letter = None  # Track last confirmed letter for display
+        # 1) YOLO detection
+        results = yolo_model(frame, imgsz=640, verbose=False)
 
-while True:
-    # Read frame from webcam
-    success, img = cap.read()
+        best_box = None
+        best_conf = 0.0
 
-    # Process the image for hand tracking (flip and convert color)
-    img = cv2.flip(img, 1)
-    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = hands.process(imgRGB)
+        for r in results:
+            for box in r.boxes:
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                if conf > best_conf:
+                    best_conf = conf
+                    best_box = (int(x1), int(y1), int(x2), int(y2))
 
-    detected_letter = None
+        if best_box is not None:
+            x1, y1, x2, y2 = best_box
 
-    # Draw hand landmarks and detect ASL
-    if results.multi_hand_landmarks:
-        for handLms in results.multi_hand_landmarks:  # Iterate through each hand
-            # Detect ASL letter
-            detected_letter = asl_detector.detect_asl_letter(handLms.landmark)
+            # Clamp + pad
+            pad = 10
+            x1 = max(0, x1 - pad)
+            y1 = max(0, y1 - pad)
+            x2 = min(w - 1, x2 + pad)
+            y2 = min(h - 1, y2 + pad)
 
-            # Stable detection logic
-            if detected_letter:
-                if detected_letter == last_letter:
-                    letter_count += 1
-                else:
-                    last_letter = detected_letter
-                    letter_count = 1
+            roi = frame[y1:y2, x1:x2]
 
-                # Display current detection
-                if letter_count >= confidence_threshold:
-                    confirmed_letter = detected_letter
-                    print(f"✓ ASL DETECTED: {detected_letter}")
-                    cv2.putText(
-                        img,
-                        f"ASL: {detected_letter}",
-                        (10, 120),
-                        cv2.FONT_HERSHEY_PLAIN,
-                        2,
-                        (0, 255, 0),
-                        2,
-                    )
-                else:
-                    # Show detecting progress with bar
-                    progress = letter_count / confidence_threshold
-                    cv2.putText(
-                        img,
-                        f"Detecting: {detected_letter} ({letter_count}/{confidence_threshold})",
-                        (10, 120),
-                        cv2.FONT_HERSHEY_PLAIN,
-                        2,
-                        (0, 255, 255),
-                        2,
-                    )
-                    # Draw progress bar
-                    bar_width = int(200 * progress)
-                    cv2.rectangle(
-                        img, (10, 140), (10 + bar_width, 155), (0, 255, 255), -1
-                    )
-                    cv2.rectangle(img, (10, 140), (210, 155), (255, 255, 255), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                    # Show last confirmed letter at top for continuity
-                    if confirmed_letter:
-                        cv2.putText(
-                            img,
-                            f"Last: {confirmed_letter}",
-                            (10, 180),
-                            cv2.FONT_HERSHEY_PLAIN,
-                            2,
-                            (200, 200, 200),
-                            2,
-                        )
-            else:
-                last_letter = None
-                letter_count = 0
-                # Still show last confirmed letter even when no detection
-                if confirmed_letter:
-                    cv2.putText(
-                        img,
-                        f"Last: {confirmed_letter}",
-                        (10, 120),
-                        cv2.FONT_HERSHEY_PLAIN,
-                        2,
-                        (200, 200, 200),
-                        2,
-                    )
+            # 2) MediaPipe on ROI
+            roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            mp_result = hands.process(roi_rgb)
 
-            # Draw fingertip circles
-            for id, lm in enumerate(handLms.landmark):  # Iterate through each landmark
-                h, w, c = img.shape  # Get dimensions of the image
-                cx, cy = int(lm.x * w), int(
-                    lm.y * h
-                )  # Convert normalized coordinates to pixel values
+            if mp_result.multi_hand_landmarks:
+                hand = mp_result.multi_hand_landmarks[0]
 
-                if id == 4:
-                    cv2.circle(
-                        img, (cx, cy), 10, (255, 0, 255), cv2.FILLED
-                    )  # Thumb tip
-                if id == 8:
-                    cv2.circle(
-                        img, (cx, cy), 10, (255, 0, 255), cv2.FILLED
-                    )  # Index finger tip
-                if id == 12:
-                    cv2.circle(
-                        img, (cx, cy), 10, (255, 0, 255), cv2.FILLED
-                    )  # Middle finger tip
-                if id == 16:
-                    cv2.circle(
-                        img, (cx, cy), 10, (255, 0, 255), cv2.FILLED
-                    )  # Ring finger tip
-                if id == 20:
-                    cv2.circle(
-                        img, (cx, cy), 10, (255, 0, 255), cv2.FILLED
-                    )  # Pinky finger tip
+                mp_drawing.draw_landmarks(roi, hand, mp_hands.HAND_CONNECTIONS)
 
-            mpDraw.draw_landmarks(
-                img, handLms, mpHands.HAND_CONNECTIONS
-            )  # Draw connections
+                vec = get_landmark_vector(hand)
+                if vec.shape[0] == 63:
+                    pred_idx = rf_model.predict([vec])[0]
+                    pred_label = rf_classes[pred_idx]
+                    pred_history.append(pred_label)
 
-    else:
-        # No hand detected - show last confirmed letter
-        if confirmed_letter:
-            cv2.putText(
-                img,
-                f"Last: {confirmed_letter}",
-                (10, 120),
-                cv2.FONT_HERSHEY_PLAIN,
-                2,
-                (200, 200, 200),
-                2,
+            roi_small = cv2.resize(roi, (200, 200))
+            frame[
+                10 : 10 + roi_small.shape[0], w - 10 - roi_small.shape[1] : w - 10
+            ] = roi_small
+
+        if len(pred_history) > 0:
+            vals, counts = np.unique(list(pred_history), return_counts=True)
+            stable_label = vals[np.argmax(counts)]
+            text = stable_label
+        else:
+            text = "..."
+
+        cv2.putText(
+            frame, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3
+        )
+
+        cv2.imshow("YOLOv8 + MediaPipe + RF ASL Recognizer", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if (
+            key == ord("q")
+            or key == 27
+            or cv2.getWindowProperty(
+                "YOLO + MediaPipe + RF ASL Recognizer", cv2.WND_PROP_VISIBLE
             )
-
-    # Calculate and display FPS
-    cTime = time.time()
-    fps = 1 / (cTime - pTime)
-    pTime = cTime
-    cv2.putText(
-        img, str(int(fps)), (10, 70), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 2
-    )
-
-    # Show the image
-    cv2.imshow("Image", img)
-
-    # Exit conditions
-    if (cv2.waitKey(1) & 0xFF == ord("q")) or (
-        cv2.getWindowProperty("Image", cv2.WND_PROP_VISIBLE) < 1
-    ):
-        break
+            < 1
+        ):
+            break
 
 cap.release()
 cv2.destroyAllWindows()
