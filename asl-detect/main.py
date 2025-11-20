@@ -14,23 +14,26 @@ def run():
     yolo_path = BASE_DIR / "runs" / "detect" / "train" / "weights" / "best.pt"
     rf_path = BASE_DIR / "asl_landmark_model.pkl"
 
-    print("YOLO path:", yolo_path, "exists:", yolo_path.exists())
-    print("RF path:", rf_path, "exists:", rf_path.exists())
+    print("    YOLO path:", yolo_path)
+    print("    RF path:", rf_path)
 
-    if not yolo_path.exists() or not rf_path.exists():
-        print("!! One or both model files are missing. Exiting run().")
+    if not yolo_path.exists():
+        print("!!! YOLO model files are missing. Exiting run().")
+        return
+    elif not rf_path.exists():
+        print("!!! RF model file is missing. Exiting run().")
         return
 
     # ---------- LOAD MODELS ----------
-    print("Loading YOLO model...")
+    print("    Loading YOLO model...")
     yolo_model = YOLO(str(yolo_path))
-    print("Loaded YOLO.")
+    print("    Loaded YOLO.")
 
-    print("Loading RF model...")
+    print("    Loading RF model...")
     bundle = joblib.load(rf_path)
     rf_model = bundle["model"]
     rf_classes = bundle["class_names"]
-    print("Loaded RF. Classes:", rf_classes)
+    print("    Loaded RF. Classes:", rf_classes)
 
     # ---------- MEDIAPIPE ----------
     mp_hands = mp.solutions.hands
@@ -44,17 +47,12 @@ def run():
         return np.array(vals, dtype=np.float32)
 
     # ---------- CAMERA ----------
-    print("Opening webcam on index 0...")
+    print("    Accessing camera...")
     cap = cv2.VideoCapture(0)
-    print("cap(0).isOpened():", cap.isOpened())
 
     if not cap.isOpened():
-        print("Failed to open camera 0. Trying camera 1...")
-        cap = cv2.VideoCapture(1)
-        print("cap(1).isOpened():", cap.isOpened())
-        if not cap.isOpened():
-            print("!! Could not open any camera. Exiting run().")
-            return
+        print("!!! Could not open any camera. Exiting run().")
+        return
 
     with mp_hands.Hands(
         static_image_mode=False,
@@ -63,14 +61,14 @@ def run():
         min_tracking_confidence=0.5,
     ) as hands:
 
-        print(">>> Entering main loop. Press 'q' or ESC to quit.")
+        print("    >>> Entering main loop. Press 'q' or ESC to quit.")
         best_box = None
         frame_count = 0
 
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("!! Failed to read frame from camera. Exiting loop.")
+                print("!!! Failed to read frame from camera. Exiting loop.")
                 break
 
             frame = cv2.flip(frame, 1)
@@ -137,22 +135,19 @@ def run():
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or key == 27:
-                print("Quit key pressed, breaking loop.")
+                print("    >>> Quit key pressed, breaking loop.")
                 break
 
     cap.release()
     cv2.destroyAllWindows()
-    print(">>> Exiting run() normally.")
 
 
 if __name__ == "__main__":
-    print("=== Starting main.py ===")
     try:
         run()
     except Exception as e:
-        print("\nERROR:", repr(e))
+        print(">>> ERROR:", repr(e))
         traceback.print_exc()
-        input("\nPress Enter to exit...")
     else:
-        print("\nFinished without exception.")
-        input("Press Enter to exit...")
+        print(">>> Exited run() without exception.")
+    print(">>> Goodbye!")
