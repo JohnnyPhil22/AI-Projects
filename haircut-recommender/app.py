@@ -1,8 +1,13 @@
-import cv2, time
+import cv2
 
-face_classifier = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+try:
+    face_classifier = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+except Exception as e:
+    print(f"Error loading cascade classifier: {e}")
+    face_classifier = None
+
 
 video_capture = cv2.VideoCapture(0)
 
@@ -17,74 +22,17 @@ def detect_nearest_face(vid):
     return max(faces, key=lambda rect: rect[2] * rect[3])
 
 
-def create_tracker():  # Create a CSRT (more accurate) or KCF (faster) tracker based on installation
-    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create"):
-        return cv2.legacy.TrackerCSRT_create()
-    if hasattr(cv2, "TrackerCSRT_create"):
-        return cv2.TrackerCSRT_create()
-    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerKCF_create"):
-        return cv2.legacy.TrackerKCF_create()
-    if hasattr(cv2, "TrackerKCF_create"):
-        return cv2.TrackerKCF_create()
-    raise RuntimeError("No CSRT / KCF tracker found in installation")
-
-
-tracker = None
-locked = False  # currently locked to a face
-lost_since = None  # time since losing lock
-REDETECT_DELAY = 2.0  # seconds to wait before re-detecting after losing lock
-WIN, last_print = "Face Detection and Lock-On", 0
+WIN = "Haircut Recommender"
 
 while True:
-    result, vid_frame = video_capture.read()  # read frames from the video
+    result, video_frame = video_capture.read()
     if not result:
-        break  # terminate the loop if the frame is not read successfully
+        break
 
-    H, W = vid_frame.shape[:2]  # take H and W of the frame for bounds checking
+    faces = detect_nearest_face(video_frame)
+    cv2.imshow(WIN, video_frame)
 
-    if not locked:
-        # Not tracking -> detect nearest face and lock on
-        bbox = detect_nearest_face(vid_frame)
-        if bbox is not None:
-            tracker = create_tracker()
-            tracker.init(vid_frame, tuple(bbox))
-            locked = True
-            lost_since = None
-            x, y, w, h = map(int, bbox)
-            cv2.rectangle(vid_frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
-
-            current = time.time()  # Print coords every 0.5 s
-            if current - last_print >= 0.5:
-                print(f"Subject locked: x={x}, y={y}, w={w}, h={h}")
-                last_print = current
-    else:
-        # Tracking phase
-        success, newbox = tracker.update(vid_frame)
-        if success:
-            x, y, w, h = map(int, newbox)
-            in_frame = 0 <= x < W and 0 <= y < H and x + w <= W and y + h <= H
-            if in_frame:
-                cv2.rectangle(vid_frame, (x, y), (x + w, y + h), (0, 220, 0), 3)
-                lost_since = None
-
-                current = time.time()  # Print coords every 0.5 s
-                if current - last_print >= 0.5:
-                    print(f"Tracking locked subject: x={x}, y={y}, w={w}, h={h}")
-                    last_print = current
-            else:
-                success = False
-
-        if not success:
-            if lost_since is None:
-                lost_since = time.time()
-
-            if time.time() - lost_since >= REDETECT_DELAY:
-                tracker = None
-                locked = False
-                print("---------------- Re-acquiring lock ----------------")
-
-    cv2.imshow(WIN, vid_frame)  # display the processed frame in a window
-
+    # check for keypress or if window was closed
     if (cv2.waitKey(1) & 0xFF == ord("q")) or (
         cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1
     ):
