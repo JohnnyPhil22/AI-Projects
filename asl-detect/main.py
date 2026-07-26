@@ -131,10 +131,11 @@ def run():
                 frame, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3
             )
 
-            cv2.imshow("YOLO + MediaPipe + RF ASL Recognizer", frame)
+            cv2.imshow("ASL Recognition", frame)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:
+            if (cv2.waitKey(1) & 0xFF == ord("q")) or (
+                cv2.getWindowProperty("ASL Recognition", cv2.WND_PROP_VISIBLE) < 1
+            ):
                 print("    >>> Quit key pressed, breaking loop.")
                 break
 
